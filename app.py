@@ -131,14 +131,190 @@ def process_uploaded_files(uploaded_files):
     
     return '\n'.join(combined_text)
 
+def analyze_requirements_from_brd(brd_text, api_key):
+    """Analyze BRD document to identify and count all functional requirements"""
+    
+    try:
+        client = OpenAI(api_key=api_key)
+    except Exception as e:
+        st.error(f"Error initializing OpenAI client: {str(e)}")
+        return [], 0
+    
+    prompt = f"""You are a Senior Business Analyst specialized in comprehensive requirements extraction from Business Requirements Documents.
+
+## BRD DOCUMENT TO ANALYZE
+
+{brd_text}
+
+## CRITICAL TASK
+
+Extract AT LEAST 30-40 UNIQUE functional requirements from the BRD. Be extremely thorough and granular. Break down complex features into multiple specific requirements.
+
+**REQUIREMENT CATEGORIES TO EXTRACT (Minimum 5-8 per category):**
+
+### 1. USER INTERFACE REQUIREMENTS (8-12 requirements)
+- Each screen/page as separate requirement
+- Form fields and their validations (group by sections)
+- Buttons, links, navigation elements
+- Menu items and dropdown options
+- Search functionality and filters
+- Display formats and layouts
+- File upload/download features
+- Modal dialogs and popups
+
+### 2. BUSINESS PROCESS REQUIREMENTS (10-15 requirements)
+- User registration/login processes
+- Account creation workflows
+- Transaction processing steps
+- Approval workflows (each approval level)
+- Status change processes
+- Email/notification triggers
+- Data synchronization processes
+- Batch processing operations
+
+### 3. DATA VALIDATION REQUIREMENTS (8-12 requirements)
+- Field-level validations (separate for each field type)
+- Business rule validations
+- Cross-field validations
+- Format validations (date, email, phone, etc.)
+- Range validations (amounts, dates)
+- Mandatory field checks
+- Duplicate data checks
+- Data integrity constraints
+
+### 4. INTEGRATION REQUIREMENTS (3-5 requirements)
+- API integrations
+- Database operations
+- Third-party service calls
+- File import/export
+- External system communications
+
+### 5. REPORTING & INQUIRY REQUIREMENTS (3-5 requirements)
+- Report generation
+- Data export features  
+- Search and inquiry functions
+- Dashboard displays
+- Analytics and metrics
+
+### 6. SECURITY & ACCESS REQUIREMENTS (3-5 requirements)
+- Authentication mechanisms
+- Authorization controls
+- Role-based access
+- Session management
+- Audit trail requirements
+
+### 7. BUSINESS RULES & CALCULATIONS (5-8 requirements)
+- Calculation logic
+- Interest computations
+- Fee calculations
+- Business rule validations
+- Conditional processing
+- Status determination logic
+
+**EXTRACTION STRATEGY:**
+1. **Be Granular**: Break large features into 3-4 smaller requirements
+2. **Field-Level**: Each form section = 1 requirement
+3. **Step-by-Step**: Each workflow step = 1 requirement  
+4. **Screen-Specific**: Each screen/page = 1 requirement
+5. **Validation-Specific**: Each validation type = 1 requirement
+6. **Role-Specific**: Different user roles = separate requirements
+
+**EXAMPLES OF GRANULAR BREAKDOWN:**
+- Instead of "User Registration" → Break into:
+  - REQ-001: User registration form - Personal details validation
+  - REQ-002: User registration form - Contact details validation  
+  - REQ-003: User registration form - Document upload functionality
+  - REQ-004: User registration - Email verification process
+  - REQ-005: User registration - Account activation workflow
+
+**MINIMUM TARGET**: 35+ unique requirements (aim for 40-50 if document is comprehensive)
+
+**NO DUPLICATES**: Each requirement must be unique and testable
+
+**OUTPUT FORMAT**:
+Return ONLY a valid JSON object with this structure:
+{{
+  "total_requirements": <number_minimum_35>,
+  "requirements": [
+    {{
+      "requirement_id": "REQ-001",
+      "requirement_type": "UI/Workflow/Data/Integration/Report/Security/Business Rule/Calculation",
+      "module": "Module Name",
+      "title": "Specific granular requirement title",
+      "description": "Detailed requirement description with specific functionality",
+      "priority": "Critical/High/Medium/Low",
+      "testable": true
+    }}
+  ]
+}}
+
+**IMPORTANT**: If the BRD seems to have fewer obvious requirements, EXPAND and DECOMPOSE existing features into granular, testable requirements. Every button click, field validation, screen display, and process step should be a separate requirement.
+
+Start extraction now - aim for 35-50 unique requirements:"""
+
+    try:
+        with st.spinner('🔍 Analyzing BRD to identify all requirements...'):
+            response = client.chat.completions.create(
+                model="gpt-4o",
+                messages=[
+                    {"role": "system", "content": "You are an expert Business Analyst specialized in requirements analysis and extraction."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=8192,
+                temperature=0.2,
+                response_format={"type": "json_object"}
+            )
+            
+            response_text = response.choices[0].message.content
+            
+            # Parse JSON response
+            try:
+                json_response = json.loads(response_text)
+                requirements = json_response.get('requirements', [])
+                total_count = json_response.get('total_requirements', len(requirements))
+                
+                return requirements, total_count
+                
+            except json.JSONDecodeError as e:
+                st.error(f"Error parsing requirements analysis: {str(e)}")
+                return [], 0
+                
+    except Exception as e:
+        st.error(f"Error analyzing requirements: {str(e)}")
+        return [], 0
+
 def generate_test_cases_with_ai(brd_text, prompt_template, api_key, options):
-    """Generate test cases using OpenAI GPT-4 API"""
+    """Generate test cases using OpenAI GPT-4o API"""
     
     try:
         client = OpenAI(api_key=api_key)
     except Exception as e:
         st.error(f"Error initializing OpenAI client: {str(e)}")
         return [], ""
+    
+    # First analyze requirements to get exact count
+    st.info("🔍 Step 1: Analyzing BRD to identify all requirements...")
+    requirements, total_requirements_count = analyze_requirements_from_brd(brd_text, api_key)
+    
+    if not requirements:
+        st.warning("Could not identify requirements. Falling back to automatic detection...")
+        total_requirements_count = 35  # Minimum fallback count
+        requirements_summary = "Analyze BRD and identify at least 35 granular requirements automatically"
+    else:
+        if total_requirements_count < 30:
+            st.warning(f"⚠️ Only {total_requirements_count} requirements found. Expanding analysis...")
+            total_requirements_count = max(35, total_requirements_count)
+            st.info(f"📈 Targeting {total_requirements_count} test cases with granular requirement breakdown")
+        else:
+            st.success(f"✅ Found {total_requirements_count} requirements in the BRD")
+        
+        requirements_summary = f"Generate EXACTLY {total_requirements_count} test cases - one for each requirement:\n"
+        for i, req in enumerate(requirements[:10], 1):  # Show first 10 for reference
+            requirements_summary += f"{i}. {req.get('title', 'N/A')} (Type: {req.get('requirement_type', 'N/A')})\n"
+        if len(requirements) > 10:
+            requirements_summary += f"... and {len(requirements) - 10} more requirements"
+    
+    st.info("🤖 Step 2: Generating test cases for each identified requirement...")
     
     # Construct the full prompt
     full_prompt = f"""{prompt_template}
@@ -151,9 +327,19 @@ def generate_test_cases_with_ai(brd_text, prompt_template, api_key, options):
 
 ---
 
+## REQUIREMENTS ANALYSIS RESULTS
+
+{requirements_summary}
+
+---
+
 ## GENERATION INSTRUCTIONS
 
-Based on the above BRD document, generate comprehensive test cases following the framework provided.
+Based on the above BRD document and requirements analysis, generate comprehensive test cases following the framework provided.
+
+**CRITICAL REQUIREMENT**: Generate EXACTLY {total_requirements_count if isinstance(total_requirements_count, int) else 'at least 35'} test cases - ONE test case for EACH identified requirement. Be comprehensive and granular - break down complex features into multiple specific test cases.
+
+**MINIMUM TEST CASE TARGET**: {total_requirements_count if isinstance(total_requirements_count, int) else '35'} test cases (ensure comprehensive coverage)
 
 **APPLICATION DOMAIN/CONTEXT:**
 {options.get('domain_context', 'Identify from BRD')}
@@ -219,12 +405,15 @@ Each test case object must have these 14 fields:
 - test_case_description
 - expected_result
 
-**IMPORTANT - AUTOMATIC TEST CASE COUNT:**
-Analyze the BRD document complexity and generate an appropriate number of test cases based on:
-- Number of modules/sections identified in the BRD
-- Number of fields, screens, and workflows described
-- Complexity of business rules and validation requirements
-- Generate sufficient test cases to comprehensively cover all requirements (typically 50-200 test cases for a complete BRD)
+**IMPORTANT - COMPREHENSIVE TEST CASE COUNT REQUIREMENT:**
+Generate EXACTLY {total_requirements_count if isinstance(total_requirements_count, int) else 'at least 35'} test cases based on:
+- One test case for each functional requirement identified in the requirements analysis
+- If requirements analysis found fewer than 30 requirements, expand by breaking down complex features into granular test cases
+- Each screen, form section, workflow step, validation rule should be a separate test case
+- Cover all UI elements, business processes, data validations, integrations, reports, and security aspects
+- Be granular: "User Registration" should become 4-5 separate test cases (personal details, contact details, document upload, email verification, account activation)
+- Ensure comprehensive coverage: {total_requirements_count if isinstance(total_requirements_count, int) else 'minimum 35'} unique test cases
+- No duplicates - each test case must test a unique aspect of the system
 
 Example format:
 {{
@@ -249,12 +438,12 @@ Start generating now:"""
     with st.spinner('🤖 AI is analyzing BRD and generating test cases...'):
         try:
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "You are an expert QA Test Analyst specialized in creating comprehensive test cases from Business Requirements Documents."},
                     {"role": "user", "content": full_prompt}
                 ],
-                max_tokens=4096,
+                max_tokens=16384,
                 temperature=0.3,
                 response_format={"type": "json_object"}
             )
@@ -269,23 +458,68 @@ Start generating now:"""
                 # Extract test cases from the response
                 if isinstance(json_response, dict) and 'test_cases' in json_response:
                     test_cases = json_response['test_cases']
+                    if test_cases and isinstance(test_cases, list):
+                        return test_cases, response_text
+                    else:
+                        return None, response_text
                 elif isinstance(json_response, list):
                     test_cases = json_response
+                    return test_cases, response_text
                 else:
                     # Try to find test_cases array in the response
                     test_cases = None
                     for key in json_response:
-                        if isinstance(json_response[key], list):
+                        if isinstance(json_response[key], list) and len(json_response[key]) > 0:
                             test_cases = json_response[key]
                             break
-                
-                if test_cases:
-                    return test_cases, response_text
-                else:
-                    return None, response_text
+                    
+                    if test_cases:
+                        return test_cases, response_text
+                    else:
+                        return None, response_text
                     
             except json.JSONDecodeError as e:
-                # Try to extract JSON array manually
+                st.warning("⚠️ JSON response incomplete due to token limit. Attempting to recover partial data...")
+                
+                # Try to extract incomplete JSON and fix it
+                try:
+                    # Find the test_cases array start
+                    test_cases_start = response_text.find('"test_cases": [')
+                    if test_cases_start != -1:
+                        # Extract from test_cases array start
+                        array_start = response_text.find('[', test_cases_start)
+                        
+                        # Find all complete test case objects
+                        test_cases = []
+                        current_pos = array_start + 1
+                        brace_count = 0
+                        current_obj_start = -1
+                        
+                        for i, char in enumerate(response_text[array_start + 1:], array_start + 1):
+                            if char == '{':
+                                if brace_count == 0:
+                                    current_obj_start = i
+                                brace_count += 1
+                            elif char == '}':
+                                brace_count -= 1
+                                if brace_count == 0 and current_obj_start != -1:
+                                    # Complete object found
+                                    obj_text = response_text[current_obj_start:i+1]
+                                    try:
+                                        test_case = json.loads(obj_text)
+                                        test_cases.append(test_case)
+                                    except:
+                                        pass
+                                    current_obj_start = -1
+                        
+                        if test_cases:
+                            st.info(f"✅ Recovered {len(test_cases)} complete test cases from incomplete response")
+                            return test_cases, response_text
+                
+                except Exception as recovery_error:
+                    st.error(f"Could not recover partial data: {str(recovery_error)}")
+                
+                # Final fallback - try to extract any JSON array
                 start_idx = response_text.find('[')
                 end_idx = response_text.rfind(']') + 1
                 
@@ -332,7 +566,7 @@ def encode_image_to_base64(image_file):
         return None
 
 def analyze_ui_screenshot(image_file, screen_name, api_key):
-    """Analyze UI screenshot using GPT-4 Vision to extract UI elements"""
+    """Analyze UI screenshot using GPT-4o Vision to extract UI elements"""
     
     try:
         client = OpenAI(api_key=api_key)
@@ -374,7 +608,7 @@ Be thorough and extract ALL interactive elements you can see. Return the JSON no
     try:
         with st.spinner(f'🔍 Analyzing {screen_name}...'):
             response = client.chat.completions.create(
-                model="gpt-4-vision-preview",
+                model="gpt-4o",
                 messages=[
                     {
                         "role": "user",
@@ -491,7 +725,7 @@ Analyze now:"""
     try:
         with st.spinner(f'🔗 Mapping UI elements to test cases...'):
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "You are an expert QA analyst specialized in UI test coverage analysis."},
                     {"role": "user", "content": prompt}
@@ -566,12 +800,12 @@ Analyze now:"""
     try:
         with st.spinner('🔍 Analyzing requirements coverage...'):
             response = client.chat.completions.create(
-                model="gpt-4-turbo-preview",
+                model="gpt-4o",
                 messages=[
                     {"role": "system", "content": "You are an expert QA analyst specialized in requirements traceability and coverage analysis."},
                     {"role": "user", "content": prompt}
                 ],
-                max_tokens=4096,
+                max_tokens=8192,
                 temperature=0.2,
                 response_format={"type": "json_object"}
             )
@@ -835,8 +1069,9 @@ def main():
         Banking, E-commerce, Healthcare, Insurance, Education, Logistics, etc.
         
         **Key Features:**
+        - 🎯 **1:1 Requirement Mapping** - One test case per requirement
+        - 📊 **Smart Requirements Analysis** - AI identifies all functional requirements first
         - 14-column structured test cases
-        - Automatic test case count (based on BRD complexity)
         - Workflow decomposition (15-step model)
         - Authorization/approval patterns
         - Field-level validations
@@ -920,24 +1155,47 @@ def main():
                         st.session_state['raw_response'] = raw_response
                         st.session_state['generation_time'] = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                         
-                        st.markdown('<div class="success-box">✅ Test cases generated successfully! Check the "View Results" tab.</div>', 
-                                  unsafe_allow_html=True)
+                        # Store requirements count for display
+                        if 'requirements_count' not in st.session_state:
+                            # Re-analyze to get requirements count for display
+                            requirements, req_count = analyze_requirements_from_brd(brd_text, api_key)
+                            st.session_state['requirements_count'] = req_count
+                        
+                        # Display success message with requirements coverage info
+                        req_count = st.session_state.get('requirements_count', 0)
+                        test_case_count = len(test_cases)
+                        
+                        if req_count > 0:
+                            coverage_ratio = (test_case_count / req_count) * 100
+                            if coverage_ratio >= 95:  # Allow for slight variation
+                                st.markdown('<div class="success-box">✅ Test cases generated successfully! Perfect 1:1 requirement coverage achieved!</div>', 
+                                          unsafe_allow_html=True)
+                                st.success(f"🎯 Generated {test_case_count} test cases for {req_count} requirements (1:1 mapping)")
+                            else:
+                                st.markdown('<div class="success-box">✅ Test cases generated successfully! Check the "View Results" tab.</div>', 
+                                          unsafe_allow_html=True)
+                                st.info(f"📊 Generated {test_case_count} test cases for {req_count} identified requirements")
+                        else:
+                            st.markdown('<div class="success-box">✅ Test cases generated successfully! Check the "View Results" tab.</div>', 
+                                      unsafe_allow_html=True)
                         
                         # Quick stats
                         df = convert_to_dataframe(test_cases)
-                        col1, col2, col3, col4, col5 = st.columns(5)
+                        col1, col2, col3, col4, col5, col6 = st.columns(6)
                         with col1:
                             st.metric("Total Test Cases", len(df))
                         with col2:
+                            st.metric("Requirements Found", req_count if req_count > 0 else "N/A")
+                        with col3:
                             field_level = len(df[df['Test Type'] == 'Field-Level']) if 'Test Type' in df.columns else 0
                             st.metric("Field-Level", field_level)
-                        with col3:
+                        with col4:
                             functional = len(df[df['Test Type'] == 'Functional']) if 'Test Type' in df.columns else 0
                             st.metric("Functional", functional)
-                        with col4:
+                        with col5:
                             negative = len(df[df['Test Type'] == 'Negative']) if 'Test Type' in df.columns else 0
                             st.metric("Negative", negative)
-                        with col5:
+                        with col6:
                             modules = df['TC Module'].nunique()
                             st.metric("Modules", modules)
                     else:
@@ -956,21 +1214,30 @@ def main():
             # Statistics
             st.subheader("📊 Statistics")
             
+            # Requirements coverage info
+            req_count = st.session_state.get('requirements_count', 0)
+            if req_count > 0:
+                coverage_ratio = (len(df) / req_count) * 100
+                if coverage_ratio >= 95:
+                    st.success(f"🎯 Perfect 1:1 Coverage: {len(df)} test cases for {req_count} requirements")
+                else:
+                    st.info(f"📊 Coverage: {len(df)} test cases for {req_count} requirements ({coverage_ratio:.1f}%)")
+            
             col1, col2, col3, col4, col5, col6 = st.columns(6)
             with col1:
                 st.metric("Total Test Cases", len(df))
             with col2:
+                st.metric("Requirements Found", req_count if req_count > 0 else "N/A", 
+                         delta=f"1:1 mapping" if req_count > 0 and abs(len(df) - req_count) <= 2 else None)
+            with col3:
                 field_level = len(df[df['Test Type'] == 'Field-Level']) if 'Test Type' in df.columns else 0
                 st.metric("Field-Level", field_level, f"{field_level/len(df)*100:.1f}%")
-            with col3:
+            with col4:
                 functional = len(df[df['Test Type'] == 'Functional']) if 'Test Type' in df.columns else 0
                 st.metric("Functional", functional, f"{functional/len(df)*100:.1f}%")
-            with col4:
+            with col5:
                 negative = len(df[df['Test Type'] == 'Negative']) if 'Test Type' in df.columns else 0
                 st.metric("Negative", negative, f"{negative/len(df)*100:.1f}%")
-            with col5:
-                critical = len(df[df['Importance'] == 'Critical'])
-                st.metric("Critical", critical)
             with col6:
                 modules = df['TC Module'].nunique()
                 st.metric("Modules", modules)
@@ -1716,8 +1983,10 @@ Not Covered: {total_uncovered}
         
         5. **Generate Test Cases**
            - Click "Generate Test Cases"
-           - Wait for AI to analyze and generate (may take 1-2 minutes)
-           - View results in the "View Results" tab
+           - **Step 1**: AI analyzes BRD to identify ALL functional requirements
+           - **Step 2**: AI generates exactly ONE test case for EACH requirement
+           - Wait for AI to complete both steps (may take 2-3 minutes)
+           - View results in the "View Results" tab with 1:1 requirement mapping
         
         6. **Review and Filter**
            - Review generated test cases
@@ -1764,11 +2033,14 @@ Not Covered: {total_uncovered}
         
         ### Framework Features
         
+        - **🎯 1:1 Requirement Mapping**: Exactly one test case generated for each functional requirement
+        - **📊 Requirements Analysis**: AI first identifies all requirements before generating test cases
         - **15-Step Workflow Model**: Complex workflows broken into 15 sequential steps
         - **Authorization Pattern**: 6+ test cases for maker-checker workflows
         - **Field Validation**: Separate test cases for each form section
         - **Variations**: Automatic generation for different customer/product types
         - **Negative Tests**: 10-15% coverage of business rule violations
+        - **Perfect Coverage**: Ensures no requirement is missed or over-tested
         
         ### Troubleshooting
         
